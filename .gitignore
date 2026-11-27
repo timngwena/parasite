@@ -1,0 +1,8 @@
+# SwiftPM build products (268 MB of intermediates)
+.build/
+# The .app assembled by scripts/build.sh — the shipped copy lives in dist/
+build/
+# Claude Code's local permission allowlist: machine-specific
+.claude/settings.local.json
+.DS_Store
+*.swp

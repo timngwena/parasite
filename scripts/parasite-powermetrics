@@ -1,0 +1,59 @@
+#!/bin/sh
+# Root-owned wrapper that exposes exactly one powermetrics invocation to Parasite.
+#
+# Why this exists: a plain `NOPASSWD: /usr/bin/powermetrics` sudoers rule would be
+# a full root escalation, because powermetrics can write arbitrary files as root
+# via its -o flag. Granting only this wrapper means the sampler set and output
+# destination are fixed in root-owned code the calling user cannot modify.
+#
+# Install target: /usr/local/libexec/parasite-powermetrics  (root:wheel, 0755)
+
+set -eu
+
+usage() {
+    echo "usage: parasite-powermetrics <sample-count 1-120> [interval-ms 200-5000]" >&2
+    exit 64
+}
+
+n="${1:-}"
+interval="${2:-1000}"
+
+case "$n" in ''|*[!0-9]*) usage ;; esac
+case "$interval" in ''|*[!0-9]*) usage ;; esac
+[ "$n" -ge 1 ] && [ "$n" -le 120 ] || usage
+[ "$interval" -ge 200 ] && [ "$interval" -le 5000 ] || usage
+
+PM=/usr/bin/powermetrics
+FLAGS="--show-process-energy --show-process-gpu --show-process-io"
+
+# Sampler availability varies across macOS releases and machines, and powermetrics
+# refuses to start if any named sampler is unknown. Degrade rather than fail:
+# each fallback drops the least essential sampler.
+tmp="$(mktemp -t parasite-pm)" || exit 70
+trap 'rm -f "$tmp"' EXIT INT TERM
+
+for samplers in \
+    "cpu_power,gpu_power,thermal,smc,tasks" \
+    "cpu_power,gpu_power,thermal,tasks" \
+    "cpu_power,thermal,tasks" \
+    "cpu_power,tasks" \
+    "cpu_power"
+do
+    # shellcheck disable=SC2086
+    if $PM -n "$n" -i "$interval" --samplers "$samplers" $FLAGS -f plist >"$tmp" 2>/dev/null \
+       && [ -s "$tmp" ]; then
+        printf '%s\n' "$samplers" >&2
+        cat "$tmp"
+        exit 0
+    fi
+    # Per-process flags can also be unsupported; retry this sampler set bare.
+    if $PM -n "$n" -i "$interval" --samplers "$samplers" -f plist >"$tmp" 2>/dev/null \
+       && [ -s "$tmp" ]; then
+        printf '%s (no per-process detail)\n' "$samplers" >&2
+        cat "$tmp"
+        exit 0
+    fi
+done
+
+echo "powermetrics produced no output for any sampler combination" >&2
+exit 75
